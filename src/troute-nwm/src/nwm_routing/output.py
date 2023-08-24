@@ -194,7 +194,7 @@ def nwm_output_generator(
 
     if test:
         flowveldepth.to_pickle(Path(test))
-    
+        nhd_io.write_flowveldepth_netcdf('/home/amin/Amin_fork/t-route/test/LowerColorado_TX/output/flowveldepth.nc', flowveldepth)
     if wbdyo and not waterbodies_df.empty:
         
         time_index, tmp_variable = map(list,zip(*i_df.columns.tolist()))
