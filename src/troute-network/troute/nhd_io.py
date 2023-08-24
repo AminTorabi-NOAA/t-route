@@ -1947,3 +1947,56 @@ def write_waterbody_netcdf(
                     'model_configuration': ''
                 }
             )
+def write_flowveldepth_netcdf(qvd_filepath, flowveldepth):
+
+    '''
+    Write results of flowveldepth to netcdf. 
+    
+    Arguments
+    -------------
+        qvd_filepath (Path or string) - directory where file will be created
+        flowveldepth (DataFrame) -  including flowrate, velocity, and depth for each time step
+        nsteps (int) - number of timesteps
+        num_features (int) - Number of features (rows)
+        
+    Returns
+    -------------
+    '''
+    
+    # each timestep have 3 values of q, v, d
+    nsteps = len(flowveldepth.columns) // 3
+    num_features = len(flowveldepth)  
+    
+    if qvd_filepath:
+
+        # open netCDF4 Dataset in write mode
+        with netCDF4.Dataset(
+            filename = qvd_filepath, 
+            mode = 'w', 
+            format ='NETCDF4'
+            ) as ncfile:
+
+            # ============ DIMENSIONS ===================
+            _ = ncfile.createDimension('feature_id', num_features)
+            _ = ncfile.createDimension('time_step', nsteps)
+
+             # =========== q,v,d VARIABLE ===============
+            for counter, var in enumerate(['flowrate', 'velocity', 'depth']):
+
+                QVD = ncfile.createVariable(
+                    varname = var, 
+                    datatype = np.float32, 
+                    dimensions = ('feature_id', 'time_step'),
+                )
+                
+                QVD.units = 'm3/s m/s m'
+                QVD.description = f'Data for {var}'
+
+                # Prepare data for writing
+                col_indices = [i for i in range(counter, nsteps * 3, 3)]  # Indices of columns with the specific var
+                data_array = flowveldepth.iloc[:, col_indices].to_numpy(dtype=np.float32)
+
+                # Set data for each feature_id and time_step
+                ncfile.variables[var][:] = data_array
+
+            print(f"Flowveldepth saved as netcdf.")
