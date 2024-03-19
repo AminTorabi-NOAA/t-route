@@ -318,15 +318,45 @@ class AbstractCompute(ABC):
         self._rconn = rconn
         self._reaches_ordered_bytw = {}
         self._results = []
-        
-        
+                
         _compute_func_map = defaultdict(compute_network_structured,{"V02-structured": compute_network_structured,})
         self.compute_func = _compute_func_map[compute_func_name]
         self.da_decay_coefficient = self._da_parameter_dict.get("da_decay_coefficient", 0)
         self._param_df["dt"] = self._dt
         self._param_df = self._param_df.astype("float32")
         self._cpu_pool = multiprocessing.cpu_count()  # Number of CPUs available
-        
+
+    def _prepare_reservoir_data_association(self):
+
+        self.usgs_df_sub, self.lastobs_df_sub, self.da_positions_list_byseg = _prep_da_dataframes(self._usgs_df, self._lastobs_df, self.param_df_sub.index, self.offnetwork_upstreams)
+        self.da_positions_list_byreach, self.da_positions_list_bygage = _prep_da_positions_byreach(self.subn_reach_list, self.lastobs_df_sub.index)
+
+        self.qlat_sub = self.qlat_sub.reindex(self.param_df_sub.index)
+        self.q0_sub = self.q0_sub.reindex(self.param_df_sub.index)        
+        # prepare reservoir DA data
+        (self.reservoir_usgs_df_sub, 
+        self.reservoir_usgs_df_time,
+        self.reservoir_usgs_update_time,
+        self.reservoir_usgs_prev_persisted_flow,
+        self.reservoir_usgs_persistence_update_time,
+        self.reservoir_usgs_persistence_index,
+        self.reservoir_usace_df_sub, 
+        self.reservoir_usace_df_time,
+        self.reservoir_usace_update_time,
+        self.reservoir_usace_prev_persisted_flow,
+        self.reservoir_usace_persistence_update_time,
+        self.reservoir_usace_persistence_index,
+        self.reservoir_rfc_df_sub, 
+        self.reservoir_rfc_totalCounts, 
+        self.reservoir_rfc_file, 
+        self.reservoir_rfc_use_forecast, 
+        self.reservoir_rfc_timeseries_idx, 
+        self.reservoir_rfc_update_time, 
+        self.reservoir_rfc_da_timestep, 
+        self.reservoir_rfc_persist_days,
+        self.waterbody_types_df_sub,
+        ) = _prep_reservoir_da_dataframes(self._reservoir_usgs_df, self._reservoir_usgs_param_df, self._reservoir_usace_df, self._reservoir_usace_param_df,
+                                        self._reservoir_rfc_df, self._reservoir_rfc_param_df, self.waterbody_types_df_sub, self._t0, self._from_files,self.offnetwork_upstreams)        
     @property
     def get_output(self):
         return self._results
@@ -446,6 +476,23 @@ class by_subnetwork_jit_clustered(AbstractCompute):
         
         self.execute_all()
 
+    def determine_path_func(self, rconn_subn):
+        if not self._waterbodies_df.empty and not self._usgs_df.empty:
+            return partial(nhd_network.split_at_gages_waterbodies_and_junctions,
+                           set(self._usgs_df.index.values),
+                           set(self._waterbodies_df.index.values),
+                           rconn_subn)
+        elif self._waterbodies_df.empty and not self._usgs_df.empty:
+            return partial(nhd_network.split_at_gages_and_junctions,
+                           set(self._usgs_df.index.values),
+                           rconn_subn)
+        elif not self._waterbodies_df.empty and self._usgs_df.empty:
+            return partial(nhd_network.split_at_waterbodies_and_junctions,
+                           set(self._waterbodies_df.index.values),
+                           rconn_subn)
+        else:
+            return partial(nhd_network.split_at_junction, rconn_subn)
+
     def _clustered_subntw(self,):
         
         self.reaches_ordered_bysubntw_clustered = {"segs": [], "upstreams": {}, "tw": [], "subn_reach_list": []}    
@@ -455,24 +502,7 @@ class by_subnetwork_jit_clustered(AbstractCompute):
             conn_subn = {k: self._connections[k] for k in subnet if k in self._connections}
             rconn_subn = {k: self._rconn[k] for k in subnet if k in self._rconn}
 
-            if not self._waterbodies_df.empty and not self._usgs_df.empty:
-                path_func = partial(nhd_network.split_at_gages_waterbodies_and_junctions,
-                                    set(self._usgs_df.index.values),
-                                    set(self._waterbodies_df.index.values),
-                                    rconn_subn)
-
-            elif self._waterbodies_df.empty and not self._usgs_df.empty:
-                path_func = partial(nhd_network.split_at_gages_and_junctions,
-                                    set(self._usgs_df.index.values),
-                                    rconn_subn)
-
-            elif not self._waterbodies_df.empty and self._usgs_df.empty:
-                path_func = partial(nhd_network.split_at_waterbodies_and_junctions,
-                                    set(self._waterbodies_df.index.values),
-                                    rconn_subn)
-
-            else:
-                path_func = partial(nhd_network.split_at_junction, rconn_subn)
+            path_func = self.determine_path_func(rconn_subn)
 
             self.reaches_ordered_bysubntw[subn_tw] = nhd_network.dfs_decomposition(rconn_subn, path_func)
             self.segs = list(chain.from_iterable(self.reaches_ordered_bysubntw[subn_tw]))
@@ -483,6 +513,8 @@ class by_subnetwork_jit_clustered(AbstractCompute):
             self.reaches_ordered_bysubntw_clustered["upstreams"].update(self._independent_networks[subn_tw])    
             self._subnetwork_list = [self._ordered_subn_dict, self.reaches_ordered_bysubntw_clustered]
             self._subnetwork_list = copy.deepcopy(self._subnetwork_list)
+
+               
     def _prepare_reservoir(self,):
         
         self.results_subn = defaultdict(list)
@@ -542,37 +574,9 @@ class by_subnetwork_jit_clustered(AbstractCompute):
         self.q0_sub = self._q0.loc[self.param_df_sub.index]
                             
         self.param_df_sub = self.param_df_sub.reindex(self.param_df_sub.index.tolist() + self.lake_segs).sort_index()
-        
-        self.usgs_df_sub, self.lastobs_df_sub, self.da_positions_list_byseg = _prep_da_dataframes(self._usgs_df, self._lastobs_df, self.param_df_sub.index, self.offnetwork_upstreams)
-        self.da_positions_list_byreach, self.da_positions_list_bygage = _prep_da_positions_byreach(self.subn_reach_list, self.lastobs_df_sub.index)
+        self._prepare_reservoir_data_association()
+    
 
-        self.qlat_sub = self.qlat_sub.reindex(self.param_df_sub.index)
-        self.q0_sub = self.q0_sub.reindex(self.param_df_sub.index)
-        # prepare reservoir DA data
-        (self.reservoir_usgs_df_sub, 
-        self.reservoir_usgs_df_time,
-        self.reservoir_usgs_update_time,
-        self.reservoir_usgs_prev_persisted_flow,
-        self.reservoir_usgs_persistence_update_time,
-        self.reservoir_usgs_persistence_index,
-        self.reservoir_usace_df_sub, 
-        self.reservoir_usace_df_time,
-        self.reservoir_usace_update_time,
-        self.reservoir_usace_prev_persisted_flow,
-        self.reservoir_usace_persistence_update_time,
-        self.reservoir_usace_persistence_index,
-        self.reservoir_rfc_df_sub, 
-        self.reservoir_rfc_totalCounts, 
-        self.reservoir_rfc_file, 
-        self.reservoir_rfc_use_forecast, 
-        self.reservoir_rfc_timeseries_idx, 
-        self.reservoir_rfc_update_time, 
-        self.reservoir_rfc_da_timestep, 
-        self.reservoir_rfc_persist_days,
-        self.waterbody_types_df_sub,
-        ) = _prep_reservoir_da_dataframes(self._reservoir_usgs_df, self._reservoir_usgs_param_df, self._reservoir_usace_df, self._reservoir_usace_param_df,
-                                        self._reservoir_rfc_df, self._reservoir_rfc_param_df, self.waterbody_types_df_sub, self._t0, self._from_files,self.offnetwork_upstreams)        
-        
     def _subset_domain(self,):
         #TODO Define subsetting method for by-network-jit-clustered
         self._reaches_ordered_bytw = {}
