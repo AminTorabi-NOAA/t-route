@@ -273,20 +273,19 @@ class AbstractCompute(ABC):
     """
     __slots__ = ["_reaches_ordered_bytw","_results",]
     
-    def __init__(self,connections, rconn, subnetwork_target_size, subnetwork_list, independent_networks,
-                 waterbodies_df, usgs_df, lastobs_df, wbody_conn, reaches_bytw, compute_func_name, 
-                 parallel_compute_method, cpu_pool, t0, dt, nts, qts_subdivisions, param_df, q0, qlats, 
-                 reservoir_usgs_df, reservoir_usgs_param_df, reservoir_usace_df, reservoir_usace_param_df, 
-                 reservoir_rfc_df, reservoir_rfc_param_df, da_parameter_dict, assume_short_ts, return_courant, 
-                 data_assimilation_parameters, waterbody_types_df, waterbody_type_specified, from_files):
+    def __init__(self, connections, rconn, wbody_conn, reaches_bytw, compute_func_name, parallel_compute_method, 
+                 subnetwork_target_size, cpu_pool, t0, dt, nts, qts_subdivisions, independent_networks, param_df, 
+                 q0, qlats, usgs_df, lastobs_df, reservoir_usgs_df, reservoir_usgs_param_df, reservoir_usace_df, 
+                 reservoir_usace_param_df, reservoir_rfc_df, reservoir_rfc_param_df, da_parameter_dict, 
+                 assume_short_ts, return_courant, waterbodies_df,data_assimilation_parameters,waterbody_types_df,
+                 waterbody_type_specified,subnetwork_list,flowveldepth_interorder = {}, from_files = True,):
         """
         Run subnetworking pre-processing, then computing.
         """
         
-        
         self._wbody_conn = wbody_conn
         self._reaches_bytw = reaches_bytw
-        self._compute_func_name = compute_func_name
+        # self._compute_func_name = compute_func_name
         self._parallel_compute_method = parallel_compute_method
         # self._cpu_pool = cpu_pool
         self._t0 = t0
@@ -319,15 +318,15 @@ class AbstractCompute(ABC):
         self._rconn = rconn
         self._reaches_ordered_bytw = {}
         self._results = []
-        self._subset_domain()
-        self._route()
+        
+        
         _compute_func_map = defaultdict(compute_network_structured,{"V02-structured": compute_network_structured,})
-        self.compute_func = _compute_func_map[self._compute_func_name]
+        self.compute_func = _compute_func_map[compute_func_name]
         self.da_decay_coefficient = self._da_parameter_dict.get("da_decay_coefficient", 0)
         self._param_df["dt"] = self._dt
         self._param_df = self._param_df.astype("float32")
         self._cpu_pool = multiprocessing.cpu_count()  # Number of CPUs available
-    
+        
     @property
     def get_output(self):
         return self._results
@@ -350,9 +349,19 @@ class AbstractCompute(ABC):
 #   4. by_subnetwork_jit_clustered: 
 # -----------------------------------------------------------------------------
 class serial(AbstractCompute):
-    def __init__(self, connections, rconn, subnetwork_target_size, subnetwork_list, independent_networks, waterbodies_df, usgs_df):
+    def __init__(self, connections, rconn, wbody_conn, reaches_bytw, compute_func_name, parallel_compute_method, 
+                 subnetwork_target_size, cpu_pool, t0, dt, nts, qts_subdivisions, independent_networks, param_df, 
+                 q0, qlats, usgs_df, lastobs_df, reservoir_usgs_df, reservoir_usgs_param_df, reservoir_usace_df, 
+                 reservoir_usace_param_df, reservoir_rfc_df, reservoir_rfc_param_df, da_parameter_dict, 
+                 assume_short_ts, return_courant, waterbodies_df,data_assimilation_parameters,waterbody_types_df,
+                 waterbody_type_specified,subnetwork_list,flowveldepth_interorder = {}, from_files = True,):
         
-        super().__init__(connections, rconn, subnetwork_target_size, subnetwork_list, independent_networks, waterbodies_df, usgs_df)
+        super().__init__(connections, rconn, wbody_conn, reaches_bytw, compute_func_name, parallel_compute_method, 
+                 subnetwork_target_size, cpu_pool, t0, dt, nts, qts_subdivisions, independent_networks, param_df, 
+                 q0, qlats, usgs_df, lastobs_df, reservoir_usgs_df, reservoir_usgs_param_df, reservoir_usace_df, 
+                 reservoir_usace_param_df, reservoir_rfc_df, reservoir_rfc_param_df, da_parameter_dict, 
+                 assume_short_ts, return_courant, waterbodies_df,data_assimilation_parameters,waterbody_types_df,
+                 waterbody_type_specified,subnetwork_list,flowveldepth_interorder = {}, from_files = True,)
         
        
                 
@@ -405,25 +414,37 @@ class by_subnetwork_jit(by_network):
         self._results = []
     
     
-class by_subnetwork_jit_clustered(by_subnetwork_jit):
-    def __init__(self):
+class by_subnetwork_jit_clustered(AbstractCompute):
+    def __init__(self, connections, rconn, wbody_conn, reaches_bytw, compute_func_name, parallel_compute_method, 
+                 subnetwork_target_size, cpu_pool, t0, dt, nts, qts_subdivisions, independent_networks, param_df, 
+                 q0, qlats, usgs_df, lastobs_df, reservoir_usgs_df, reservoir_usgs_param_df, reservoir_usace_df, 
+                 reservoir_usace_param_df, reservoir_rfc_df, reservoir_rfc_param_df, da_parameter_dict, 
+                 assume_short_ts, return_courant, waterbodies_df,data_assimilation_parameters,waterbody_types_df,
+                 waterbody_type_specified,subnetwork_list,flowveldepth_interorder = {}, from_files = True,):
         """
         By Network JIT Clustered compute class.
         
         #NOTE I think this can be a subclass of by_subnetwork_jit. It
         # just needs a couple extra steps to cluster subnetworks. -shorvath.
         """
-        super().__init__()
+        
+        super().__init__(connections, rconn, wbody_conn, reaches_bytw, compute_func_name, parallel_compute_method, 
+                 subnetwork_target_size, cpu_pool, t0, dt, nts, qts_subdivisions, independent_networks, param_df, 
+                 q0, qlats, usgs_df, lastobs_df, reservoir_usgs_df, reservoir_usgs_param_df, reservoir_usace_df, 
+                 reservoir_usace_param_df, reservoir_rfc_df, reservoir_rfc_param_df, da_parameter_dict, 
+                 assume_short_ts, return_courant, waterbodies_df,data_assimilation_parameters,waterbody_types_df,
+                 waterbody_type_specified,subnetwork_list,flowveldepth_interorder = {}, from_files = True,)
          # Here we find the networks_with_subnetworks_order_jit
         if not self._subnetwork_list[0] or not self._subnetwork_list[1]:
             self.networks_with_subnetworks_ordered_jit = nhd_network.build_subnetworks(
                     self._connections, self._rconn, self._subnetwork_target_size)
         else:
-            self.subnetworks_only_ordered_jit, self.reaches_ordered_bysubntw_clustered = copy.deepcopy(self._subnetwork_list)
+            self._ordered_subn_dict, self.reaches_ordered_bysubntw_clustered = copy.deepcopy(self._subnetwork_list)
         
         # we call the recursive function here to get the self._reaches_ordered_bytw
         self._ordered_subn_dict = find_deepest_dicts(self.networks_with_subnetworks_ordered_jit)
         
+        self.execute_all()
 
     def _clustered_subntw(self,):
         
@@ -453,14 +474,15 @@ class by_subnetwork_jit_clustered(by_subnetwork_jit):
             else:
                 path_func = partial(nhd_network.split_at_junction, rconn_subn)
 
-            self._reaches_ordered_bysubntw[subn_tw] = nhd_network.dfs_decomposition(rconn_subn, path_func)
-            self.segs = list(chain.from_iterable(self._reaches_ordered_bysubntw[subn_tw]))
+            self.reaches_ordered_bysubntw[subn_tw] = nhd_network.dfs_decomposition(rconn_subn, path_func)
+            self.segs = list(chain.from_iterable(self.reaches_ordered_bysubntw[subn_tw]))
             
-            self.reaches_ordered_bysubntw_clustered["segs"].append(self.segs)
+            self.reaches_ordered_bysubntw_clustered["segs"].extend(self.segs)
             self.reaches_ordered_bysubntw_clustered["tw"].append(subn_tw)
-            self.reaches_ordered_bysubntw_clustered["subn_reach_list"].extend(self._reaches_ordered_bysubntw[subn_tw])
+            self.reaches_ordered_bysubntw_clustered["subn_reach_list"].extend(self.reaches_ordered_bysubntw[subn_tw])
             self.reaches_ordered_bysubntw_clustered["upstreams"].update(self._independent_networks[subn_tw])    
-
+            self._subnetwork_list = [self._ordered_subn_dict, self.reaches_ordered_bysubntw_clustered]
+            self._subnetwork_list = copy.deepcopy(self._subnetwork_list)
     def _prepare_reservoir(self,):
         
         self.results_subn = defaultdict(list)
@@ -472,7 +494,7 @@ class by_subnetwork_jit_clustered(by_subnetwork_jit):
             for us in self._rconn[seg]:
                 if us not in segs_set:
                     self.offnetwork_upstreams.add(us)
-
+        
         segs.extend(self.offnetwork_upstreams)
         
         self.common_segs = list(self._param_df.index.intersection(segs))
@@ -514,8 +536,8 @@ class by_subnetwork_jit_clustered(by_subnetwork_jit):
         self.upstreams = self.reaches_ordered_bysubntw_clustered["upstreams"]
 
 
-        self.subn_reach_list_with_type = self._build_reach_type_list(self.subn_reach_list, self.wbodies_segs)
-
+        self.subn_reach_list_with_type = _build_reach_type_list(self.subn_reach_list, self.wbodies_segs)
+        
         self.qlat_sub = self._qlats.loc[self.param_df_sub.index]
         self.q0_sub = self._q0.loc[self.param_df_sub.index]
                             
@@ -556,6 +578,7 @@ class by_subnetwork_jit_clustered(by_subnetwork_jit):
         self._reaches_ordered_bytw = {}
     
     def _route(self,):
+        
         #TODO Define routing compute method for by-network-jit-clustered
         jobs = []
         with Parallel(n_jobs=self._cpu_pool, backend="loky") as parallel:
@@ -625,28 +648,33 @@ class by_subnetwork_jit_clustered(by_subnetwork_jit):
                     },
                     self._assume_short_ts,
                     self._return_courant,
-                    from_files = self.from_files,
+                    from_files = self._from_files,
                 )
             )
             self.results_subn = parallel(jobs)
 
     def output(self):   
-        self.flowveldepth_interorder = {}
+        # self.flowveldepth_interorder = {}
         
-        for subn_tw in self.reaches_ordered_bysubntw_clustered["tw"]:
-            # TODO: This index step is necessary because we sort the segment index
-            # TODO: I think there are a number of ways we could remove the sorting step
-            #       -- the binary search could be replaced with an index based on the known topology
-            self.flowveldepth_interorder[subn_tw] = {}
+        # for subn_tw in self.reaches_ordered_bysubntw_clustered["tw"]:
+        #     # TODO: This index step is necessary because we sort the segment index
+        #     # TODO: I think there are a number of ways we could remove the sorting step
+        #     #       -- the binary search could be replaced with an index based on the known topology
+        #     self.flowveldepth_interorder[subn_tw] = {}
+        #     
+        #     subn_tw_sortposition = (self.results_subn[0].tolist().index(subn_tw))
 
-            subn_tw_sortposition = (self.results_subn[0].tolist().index(subn_tw))
+        #     self.flowveldepth_interorder[subn_tw]["results"] = self.results_subn[1][subn_tw_sortposition]
+        #     # what will it take to get just the tw FVD values into an array to pass to the next loop?
+        #     # There will be an empty array initialized at the top of the loop, then re-populated here.
+        #     # we don't have to bother with populating it after the last group
 
-            self.flowveldepth_interorder[subn_tw]["results"] = self.results_subn[1][subn_tw_sortposition]
-            # what will it take to get just the tw FVD values into an array to pass to the next loop?
-            # There will be an empty array initialized at the top of the loop, then re-populated here.
-            # we don't have to bother with populating it after the last group
-
-        results = []
-        for order in self.subnetworks_only_ordered_jit:
-            results.extend(self.results_subn) 
-        self._results = results       
+        
+        self._results = self.results_subn 
+        
+    def execute_all(self,):
+        self._clustered_subntw()
+        self._prepare_reservoir()
+        self._subset_domain()
+        self._route()
+        self.output()
