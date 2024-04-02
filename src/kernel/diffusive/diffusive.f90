@@ -44,6 +44,7 @@ module diffusive
   double precision :: dt_qtrib
   double precision :: z_g, bo_g, traps_g, tw_g, twcc_g, so_g, mann_g, manncc_g
   double precision :: dmyi, dmyj
+  double precision :: dtini_min
   double precision, dimension(:),       allocatable :: eei, ffi, exi, fxi, qcx, diffusivity2, celerity2
   double precision, dimension(:),       allocatable :: ini_y, ini_q
   double precision, dimension(:),       allocatable :: lowerLimitCount, higherLimitCount
@@ -219,6 +220,7 @@ contains
     double precision, dimension(:,:), allocatable :: used_lfrac    
     double precision, dimension(:,:,:), allocatable :: temp_q_ev_g
     double precision, dimension(:,:,:), allocatable :: temp_elv_ev_g    
+    open(1,FILE="identify_badtopobathy_segment.txt",STATUS='unknown')
 
   !-----------------------------------------------------------------------------
   ! Time domain parameters
@@ -232,7 +234,7 @@ contains
     dt_qtrib     = timestep_ar_g(8) ! tributary data time step [sec]
     dt_da        = timestep_ar_g(9) ! data assimilation data time step [sec]
     dtini_given  = dtini            ! preserve user-input timestep duration
-
+    dtini_min    = dtini/10.0 
   !-----------------------------------------------------------------------------
   ! miscellaneous parameters
     timesDepth = 4.0 ! water depth multiplier used in readXsection
@@ -425,6 +427,7 @@ contains
     do jm = 1, nmstem_rch !* mainstem reach only
       j = mstem_frj(jm)
       do i = 1, frnw_g(j, 1)
+        write(1,*) i, j
         call readXsection_natural_mann_vertices(i, j, timesDepth)
       end do
     end do
@@ -974,6 +977,7 @@ contains
   ! Calculate maximum timestep duration for numerical stability
   
     dtini = maxAllowCourantNo / max_C_dx
+    
     a     = floor( (time - initialTime * 60.) / &
                  ( saveInterval / 60.))           
     b     = floor(((time - initialTime * 60.) + dtini / 60.) / &
@@ -985,6 +989,9 @@ contains
     ! if dtini extends beyond final time, then truncate it
     if (time + dtini / 60. > tfin * 60.) dtini = (tfin * 60. - time) * 60.
 
+    ! Print statement for dtini, maxAllowCourantNo, and max_C_dx
+    print *, "dtini = ", dtini, "maxAllowCourantNo (CFL) = ", maxAllowCourantNo, &
+            "max_C_dx = ", max_C_dx
   end subroutine  
 
   subroutine calc_dimensionless_numbers(j)
@@ -1388,7 +1395,7 @@ contains
     double precision :: S_ncomp                             
     double precision :: tempDepthi_1
     double precision :: Q_cur, Q_ds, z_cur, z_ds, y_cur, y_ds
-
+    double precision :: C_ulm
   !-----------------------------------------------------------------------------
     ncomp = frnw_g(j, 1)
     S_ncomp = (-z(ncomp, j) + z(ncomp-1, j)) / dx(ncomp-1, j)
@@ -1480,7 +1487,18 @@ contains
                           / (1. / (sk(i, j) * q_sk_multi)) ** 0.6
         diffusivity2(i) = abs(qp(i, j)) / 2.0 / bo(i, j) / abs(sfi)
         vel             = qp(i, j) / newArea(i, j)
-        
+
+        ! put upper limit on computed celerity to make sure internal temporal increment not being too small.
+        if (i.gt.1) then
+          C_ulm = cfl*dx(i-1,j)/dtini_min
+        else 
+          C_ulm = cfl*dx(i,j)/dtini_min
+        endif
+
+        if (celerity2(i).gt.C_ulm) then
+          celerity2(i) = C_ulm
+        endif        
+
         ! Check celerity value
         !if (celerity2(i) .gt. 3.0 * vel) celerity2(i) = vel * 3.0
       !else
@@ -1756,6 +1774,11 @@ contains
     integer,          intent(in) :: idx_node, idx_reach 
     double precision, intent(in) :: timesDepth
     
+    ! Declarations
+    logical :: lookupTableComplete
+    character(len=50) :: file_name
+   
+
     ! subroutine local variables
     integer          :: i_area, i_find, num
     integer          :: i1, i2
@@ -1779,6 +1802,7 @@ contains
     allocate(compoundSKK(nel), elev(nel))
     allocate(i_start(nel), i_end(nel))
 
+    lookupTableComplete = .false.
     f2m            =   1.0
     maxTableLength = size_bathy(idx_node, idx_reach) + 2 ! 2 is added to count for a vertex on each infinite vertical wall on either side.
 
@@ -1940,9 +1964,14 @@ contains
         ! -- find j* such that conv1(j*) >> conv1(j-1)
         ii = iel
         
-        do while (conv1(ii) <= (1.0 + incr_rate) * conv1(iel-1))
-          ii = ii + 1
+        do while (conv1(ii) <= (1.0 + incr_rate) * conv1(iel-1) .and. ii < nel)
+            ii = ii + 1
         end do
+
+        ! if ii has reached nel after the loop; set the flag to true
+        if (ii >= nel) then
+            lookupTableComplete = .true.
+        endif
         
         iel_incr_start = ii
         pos_slope      = (conv1(iel_incr_start) - conv1(iel-1)) / (el1(iel_incr_start) - el1(iel-1))
@@ -2006,7 +2035,26 @@ contains
       xsec_tab(9, iel, idx_node, idx_reach)     =   newdKdA(iel)
       xsec_tab(11,iel, idx_node, idx_reach)     =   compoundSKK(iel)
     end do
-
+    
+    if (lookupTableComplete) then
+        ! Construct a unique filename for each node and reach
+        
+        write(file_name, "('lookup_table_node',I0,'_reach',I0,'.csv')") idx_node, idx_reach
+        open(unit=10, file=file_name, status='replace', action='write')
+        write(10, *) 'Elevation,Area,Perimeter,Hydraulic Radius,Conveyance,Top Width,Differential Conveyance,Compound SKK'
+        do iel = 1, nel
+            write(10, *) xsec_tab(1, iel, idx_node, idx_reach), &
+                 xsec_tab(2, iel, idx_node, idx_reach), &
+                 xsec_tab(3, iel, idx_node, idx_reach), &
+                 xsec_tab(4, iel, idx_node, idx_reach), &
+                 xsec_tab(5, iel, idx_node, idx_reach), &
+                 xsec_tab(6, iel, idx_node, idx_reach), &
+                 xsec_tab(9, iel, idx_node, idx_reach), &
+                 xsec_tab(11,iel, idx_node, idx_reach)
+        end do
+        close(unit=10)
+    endif
+    
     z(idx_node, idx_reach)  =   el_min
 
     deallocate(el1, a1, peri1, redi1, redi1All)
